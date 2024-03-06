@@ -1,7 +1,31 @@
-use libusb::{Context, Recipient};
+use evdev::uinput::VirtualDeviceBuilder;
+use evdev::{AttributeSet, EventType, InputEvent, Key};
+use libusb::Context;
 use std::time::Duration;
+use std::thread::sleep;
 
 fn main() {
+    // somehow it knows this is a joystick (and not a keyboard or mouse or something)
+    let mut attr_set = AttributeSet::<Key>::new();
+    attr_set.insert(Key::BTN_SOUTH);
+    let mut device = VirtualDeviceBuilder::new()
+        .unwrap()
+        .name("Gamecube Controller Port 1")
+        .with_keys(&attr_set)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    loop {
+        device.emit(&[InputEvent::new(EventType::KEY, 304, 1)]).expect("Erorr pushing event"); // pushes BTN_SOUTH down, need to find documentation for these
+        sleep(Duration::from_secs(1));
+        device.emit(&[InputEvent::new(EventType::KEY, 304, 0)]).expect("Erorr pushing event"); // pushes BTN_SOUTH down, need to find documentation for these
+        sleep(Duration::from_secs(1));
+    }
+    
+}
+
+fn main2() {
     // get all usb devices
 
     // find the gc adapter
@@ -25,7 +49,7 @@ fn main() {
 
             // figure out the configuration
             let mut endpoint_in = 0;
-            let mut endpoint_out = 0;
+            let mut _endpoint_out = 0;
             // this is what dolphin does, i guess this handles the embedded usb port? you would think they could hardcode it
             let config = device.config_descriptor(0).expect("Could not get active config descriptor");
             for interface in config.interfaces() {  
@@ -36,7 +60,7 @@ fn main() {
                             endpoint_in = endpoint_descriptor.address();
                         } else {
                             // out
-                            endpoint_out = endpoint_descriptor.address();
+                            _endpoint_out = endpoint_descriptor.address();
                         }
                     }
                 }
@@ -61,7 +85,7 @@ fn main() {
 
             let mut buffer: [u8; 37] = [0; PAYLOAD_SIZE];
             loop {
-                let result = dev_handle.read_interrupt(0x81, &mut buffer, timeout);
+                let result = dev_handle.read_interrupt(endpoint_in, &mut buffer, timeout);
                 match result {
                     Ok(size) => {
                         print!("{} ", size); // this semicolon is necessary?
