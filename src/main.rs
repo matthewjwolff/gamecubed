@@ -1,11 +1,16 @@
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
-use evdev::{AttributeSet, EventType, InputEvent, Key};
+use evdev::{AbsInfo, AbsoluteAxisType, AttributeSet, EventType, InputEvent, Key, UinputAbsSetup};
 use libusb::Context;
 use std::time::Duration;
-use std::thread::sleep;
 
-fn main2() {
-    // somehow it knows this is a joystick (and not a keyboard or mouse or something)
+enum ControllerType {
+    None,
+    Wired,
+    Wireless
+}
+
+fn main() {
+    // set up virtual pad
     let attr_set = {
         // keep the mutable ref inside this scope
         let mut attr_set = AttributeSet::<Key>::new();
@@ -16,6 +21,7 @@ fn main2() {
         attr_set.insert(Key::BTN_EAST);
 
         // dpad
+        // ok so xbox one controller maps dpad to "hat zero" axis (hardcoded 0 1)
         attr_set.insert(Key::BTN_DPAD_DOWN);
         attr_set.insert(Key::BTN_DPAD_LEFT);
         attr_set.insert(Key::BTN_DPAD_RIGHT);
@@ -33,32 +39,29 @@ fn main2() {
 
         attr_set
     };
+
+    // xbox controller announced as 0,0,65535,255,4095,1
+    let l_stick_x = UinputAbsSetup::new(AbsoluteAxisType::ABS_X, AbsInfo::new(0, 0, 128, 0, 0, 1)); // guessed on resolution
+    let l_stick_y = UinputAbsSetup::new(AbsoluteAxisType::ABS_Y, AbsInfo::new(0, 0, 128, 0, 0, 1)); // guessed on resolution
+    let r_stick_x = UinputAbsSetup::new(AbsoluteAxisType::ABS_Z, AbsInfo::new(0, 0, 128, 0, 0, 1)); // guessed on resolution
+    let r_stick_y = UinputAbsSetup::new(AbsoluteAxisType::ABS_RZ, AbsInfo::new(0, 0, 128, 0, 0, 1)); // guessed on resolution
+    let rt = UinputAbsSetup::new(AbsoluteAxisType::ABS_GAS, AbsInfo::new(0, 0, 128, 0, 0, 1)); // guessed on resolution
+    let lt = UinputAbsSetup::new(AbsoluteAxisType::ABS_BRAKE, AbsInfo::new(0, 0, 128, 0, 0, 1)); // guessed on resolution
     
-    let mut device = VirtualDeviceBuilder::new()
+    let mut v_device = VirtualDeviceBuilder::new()
         .unwrap()
         .name("Gamecube Controller Port 1")
         .with_keys(&attr_set)
         .unwrap()
+        .with_absolute_axis(&l_stick_x).unwrap()
+        .with_absolute_axis(&l_stick_y).unwrap()
+        .with_absolute_axis(&r_stick_x).unwrap()
+        .with_absolute_axis(&r_stick_y).unwrap()
+        .with_absolute_axis(&rt).unwrap()
+        .with_absolute_axis(&lt).unwrap()
         .build()
         .unwrap();
 
-        // apparently the kernel will ignore repeated down events without an up event (it knows you can't push a key that's already been pushed?)
-    loop {
-        // note that events that are expected to be simultaneous should be part of the same array
-        device.emit(&[InputEvent::new(EventType::KEY, 304, 1)]).expect("Erorr pushing event"); // pushes BTN_SOUTH down, need to find documentation for these
-        sleep(Duration::from_secs(1));
-        device.emit(&[InputEvent::new(EventType::KEY, 304, 0)]).expect("Erorr pushing event"); // pushes BTN_SOUTH down, need to find documentation for these
-        sleep(Duration::from_secs(1));
-    }
-    
-}
-
-enum ControllerType {
-    None,
-    Wired,
-    Wireless
-}
-fn main() {
     // get all usb devices
 
     // find the gc adapter
@@ -122,44 +125,76 @@ fn main() {
                 let result = dev_handle.read_interrupt(endpoint_in, &mut buffer, timeout);
                 match result {
                     Ok(size) => {
-
-                        for i in buffer {
-                            print!("{} ", i);
-                        }
-                        println!("");
                         
                         // from dolphin source code
-                        for i in 0..4 {
+                        // TODO more than one controller
+                        let i=0;
+                        //for i in 0..4 
+                        {
                             // controller_payload_size = 9;
                             let controller_payload = &buffer[i*9+1..i*9+10];
                             let controller_type_pl = controller_payload[0];
                             let controller_type = if (controller_type_pl & 0b00010000)!=0 { ControllerType::Wired} else if (controller_type_pl & 0b00100000)!=0 {ControllerType::Wireless} else {ControllerType::None};
 
-                            // actual buttons are bits in these two
-                            let buttons_1 = controller_payload[1];
-                            let a = (buttons_1 & 0b00000001) != 0;
-                            let b = (buttons_1 & 0b00000010) != 0;
-                            let x = (buttons_1 & 0b00000100) != 0;
-                            let y = (buttons_1 & 0b00001000) != 0;
-
-                            let dpad_left =  (buttons_1 & 0b00010000) != 0;
-                            let dpad_right = (buttons_1 & 0b00100000) != 0;
-                            let dpad_down =  (buttons_1 & 0b01000000) != 0;
-                            let dpad_up =    (buttons_1 & 0b10000000) != 0;
-
+                            // TODO actually use the enum (rust wants you to do pattern matching or something)
+                            if (controller_type_pl & 0b00010000)!=0 {
+                                let buttons_1 = controller_payload[1];
                             let buttons_2 = controller_payload[2];
-                            let start =   (buttons_2 & 0b00000000) != 0;
-                            let z: bool =       (buttons_2 & 0b00000010) != 0;
-                            let r_click = (buttons_2 & 0b00000100) != 0;
-                            let l_click = (buttons_2 & 0b00001000) != 0;
-                            // i guess some unused bits in byte 3?
-
                             let stick_x = controller_payload[3];
                             let stick_y = controller_payload[4];
                             let cstick_x = controller_payload[5];
                             let cstick_y = controller_payload[6];
                             let l = controller_payload[7];
                             let r = controller_payload[8];
+
+                            let a = (buttons_1 >> 0) & 1;
+                            let b = (buttons_1 >> 1) & 1;
+                            let x = (buttons_1 >> 2) & 1;
+                            let y = (buttons_1 >> 3) & 1;
+
+                            let dpad_left =  (buttons_1 >> 4) & 1;
+                            let dpad_right = (buttons_1 >> 5) & 1;
+                            let dpad_down =  (buttons_1 >> 6) & 1;
+                            let dpad_up =    (buttons_1 >> 7) & 1;
+
+                            
+                            let start =   (buttons_2 >> 0) & 1;
+                            let z =       (buttons_2 >> 1) & 1;
+                            let r_click = (buttons_2 >> 2) & 1;
+                            let l_click = (buttons_2 >> 3) & 1;
+                            // i guess some unused bits in byte 3?
+
+                                v_device.emit(&[
+                                    InputEvent::new(EventType::KEY, Key::BTN_SOUTH.code(), a.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_EAST.code(), b.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_WEST.code(), x.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_NORTH.code(), y.into()),
+
+                                    InputEvent::new(EventType::KEY, Key::BTN_DPAD_LEFT.code(), dpad_left.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_DPAD_RIGHT.code(), dpad_right.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_DPAD_DOWN.code(), dpad_down.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_DPAD_UP.code(), dpad_up.into()),
+                                    
+                                    InputEvent::new(EventType::KEY, Key::BTN_START.code(), start.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_SELECT.code(), z.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_TL.code(), l_click.into()),
+                                    InputEvent::new(EventType::KEY, Key::BTN_TR.code(), r_click.into()),
+
+                                    
+                                    InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_X.0, stick_x.into()),
+                                    InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_Y.0, stick_y.into()),
+                                    InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_Z.0, cstick_x.into()),
+                                    InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_RZ.0, cstick_y.into()),
+                                    InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_GAS.0, l.into()),
+                                    InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_BRAKE.0, r.into()),
+                                    
+                                ]).expect("Erorr pushing event")
+                            }
+                            
+
+                            
+
+                            
                         }
                          
                         // TODO what if size not 37?
