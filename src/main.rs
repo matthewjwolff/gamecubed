@@ -1,6 +1,6 @@
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AbsInfo, AbsoluteAxisType, AttributeSet, EventType, InputEvent, Key, UinputAbsSetup};
-use libusb::Context;
+use rusb::{Context, UsbContext};
 use std::time::Duration;
 
 const PAYLOAD_SIZE: usize = 37; // from dolphin source
