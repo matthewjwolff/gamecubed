@@ -3,15 +3,12 @@ use evdev::{AbsInfo, AbsoluteAxisType, AttributeSet, EventType, InputEvent, Key,
 use libusb::Context;
 use std::time::Duration;
 
-enum ControllerType {
-    None,
-    Wired,
-    Wireless
-}
+const PAYLOAD_SIZE: usize = 37; // from dolphin source
+const TIMEOUT: Duration = Duration::from_millis(1000); // from dolphin source
 
 // TODO only has ports 1-4
 // TODO make const things const
-fn make_new_controller(port_label: usize) -> VirtualDevice {
+fn make_new_controller(port_label: usize, wireless: bool) -> VirtualDevice {
     // set up virtual pad
     let attr_set = {
         // keep the mutable ref inside this scope
@@ -51,16 +48,16 @@ fn make_new_controller(port_label: usize) -> VirtualDevice {
     let lt = UinputAbsSetup::new(AbsoluteAxisType::ABS_BRAKE, AbsInfo::new(30, 1, 255, 0, 0, 1)); 
     
     VirtualDeviceBuilder::new()
-    .unwrap()
-    .name(&format!("Gamecube Controller Port {}",port_label))
-    .with_keys(&attr_set)
-    .unwrap()
-    .with_absolute_axis(&l_stick_x).unwrap()
-    .with_absolute_axis(&l_stick_y).unwrap()
-    .with_absolute_axis(&r_stick_x).unwrap()
-    .with_absolute_axis(&r_stick_y).unwrap()
-    .with_absolute_axis(&rt).unwrap()
-    .with_absolute_axis(&lt).unwrap()
+        .unwrap()
+        .name(&format!("Gamecube {} Port {}", if wireless {"Wireless Controller"} else {"Controller"},port_label))
+        .with_keys(&attr_set)
+        .unwrap()
+        .with_absolute_axis(&l_stick_x).unwrap()
+        .with_absolute_axis(&l_stick_y).unwrap()
+        .with_absolute_axis(&r_stick_x).unwrap()
+        .with_absolute_axis(&r_stick_y).unwrap()
+        .with_absolute_axis(&rt).unwrap()
+        .with_absolute_axis(&lt).unwrap()
         .build()
         .unwrap()
 }
@@ -72,6 +69,7 @@ fn main() {
     let devices = cx.devices().expect("Could not get devices");
     for device in devices.iter() {
         // TODO find the gamecube adapter
+        // TODO hotplugging
         let descriptor = device
             .device_descriptor()
             .expect("Could not get device descriptor");
@@ -106,46 +104,31 @@ fn main() {
             }
             
 
-            
-            //dev.reset().expect("Could not reset device");
-            let timeout = Duration::from_millis(1000); // from dolphin source
-
-            
-
-            // now we have to write this magic number?
-            // stalls forever here?
-            // TODO apparently don't have to do this, even though dolphin does?
-            //let write_result = dev_handle.write_interrupt(0x02, &[0x13], Duration::from_millis(0));
-            //println!("Wrote {} bytes", write_result.expect("could not write to device"));
-
             // now do whatever dolphin does...
-            const PAYLOAD_SIZE: usize = 37; // from dolphin source
-            
+
+            // dolphin writes this magic number
+            // it's fine if it fails
+            match dev_handle.write_interrupt(0x02, &[0x13], TIMEOUT) {
+                Ok(bytes) => println!("Wrote {} bytes", bytes),
+                Err(e) => println!("Error writing: {}", e)
+            };
 
             let mut buffer: [u8; 37] = [0; PAYLOAD_SIZE];
             let mut devices: [Option<VirtualDevice>;4] = [Option::None, Option::None, Option::None, Option::None];
 
             loop {
-                let result = dev_handle.read_interrupt(endpoint_in, &mut buffer, timeout);
+                let result = dev_handle.read_interrupt(endpoint_in, &mut buffer, TIMEOUT);
                 match result {
-                    Ok(size) => {
-                        
-                        for i in buffer {
-                            print!("{} ", i)
-                        }
-                        println!();
+                    Ok(_size) => {
                         // from dolphin source code
-                        // TODO more than one controller
-                        //let i=0;
-                        for i in 0..4 
-                        {
+                        for i in 0..4 {
                             // controller_payload_size = 9;
                             let controller_payload = &buffer[i*9+1..i*9+10];
                             let controller_type = controller_payload[0];
-                            let plugged_in = (controller_type & 0b00010000)!=0;
+                            // if bit 4, wired, if bit 5 wireless, else none
+                            let plugged_in = (controller_type & 0b00110000)!=0;
+                            let is_wireless = (controller_type & 0b00100000) != 0;
 
-                            // TODO actually use the enum (rust wants you to do pattern matching or something)
-                            // TODO dropping a VirtualDevice will drop the underlying OwnedFd, which will close the file descriptor, which should remove the device. so it all works, as long as i can manually drop the value
                             let maybe_device = &mut devices[i];
 
                             if !plugged_in {
@@ -154,7 +137,7 @@ fn main() {
                                 drop(maybe_device.take())
                             } else {
                                 // if Some, get it, if None, replace it with a new controller and return that
-                                let v_device = maybe_device.get_or_insert_with(|| make_new_controller(i+1));
+                                let v_device = maybe_device.get_or_insert_with(|| make_new_controller(i+1, is_wireless));
 
                                 let buttons_1 = controller_payload[1];
                                 let buttons_2 = controller_payload[2];
@@ -209,15 +192,8 @@ fn main() {
                                     InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_BRAKE.0, r.into()),
                                     
                                 ]).expect("Erorr pushing event");
-                            }
-                            
-
-                            
-
-                            
+                            }   
                         }
-                         
-                        // TODO what if size not 37?
                     },
                     Err(error) => println!("ERROR {}", error),
                 }
