@@ -9,9 +9,9 @@ enum ControllerType {
     Wireless
 }
 
-
-
-fn main() {
+// TODO only has ports 1-4
+// TODO make const things const
+fn make_new_controller(port_label: usize) -> VirtualDevice {
     // set up virtual pad
     let attr_set = {
         // keep the mutable ref inside this scope
@@ -50,22 +50,23 @@ fn main() {
     let rt = UinputAbsSetup::new(AbsoluteAxisType::ABS_GAS, AbsInfo::new(30, 1, 255, 0, 0, 1)); 
     let lt = UinputAbsSetup::new(AbsoluteAxisType::ABS_BRAKE, AbsInfo::new(30, 1, 255, 0, 0, 1)); 
     
-    let mut v_device = VirtualDeviceBuilder::new()
-        .unwrap()
-        .name("Gamecube Controller Port 1")
-        .with_keys(&attr_set)
-        .unwrap()
-        .with_absolute_axis(&l_stick_x).unwrap()
-        .with_absolute_axis(&l_stick_y).unwrap()
-        .with_absolute_axis(&r_stick_x).unwrap()
-        .with_absolute_axis(&r_stick_y).unwrap()
-        .with_absolute_axis(&rt).unwrap()
-        .with_absolute_axis(&lt).unwrap()
+    VirtualDeviceBuilder::new()
+    .unwrap()
+    .name(&format!("Gamecube Controller Port {}",port_label))
+    .with_keys(&attr_set)
+    .unwrap()
+    .with_absolute_axis(&l_stick_x).unwrap()
+    .with_absolute_axis(&l_stick_y).unwrap()
+    .with_absolute_axis(&r_stick_x).unwrap()
+    .with_absolute_axis(&r_stick_y).unwrap()
+    .with_absolute_axis(&rt).unwrap()
+    .with_absolute_axis(&lt).unwrap()
         .build()
-        .unwrap();
+        .unwrap()
+}
 
+fn main() {
     // get all usb devices
-
     // find the gc adapter
     let cx = Context::new().expect("Error loading libUSB");
     let devices = cx.devices().expect("Could not get devices");
@@ -123,6 +124,7 @@ fn main() {
 
             let mut buffer: [u8; 37] = [0; PAYLOAD_SIZE];
             let mut devices: [Option<VirtualDevice>;4] = [Option::None, Option::None, Option::None, Option::None];
+
             loop {
                 let result = dev_handle.read_interrupt(endpoint_in, &mut buffer, timeout);
                 match result {
@@ -134,43 +136,53 @@ fn main() {
                         println!();
                         // from dolphin source code
                         // TODO more than one controller
-                        let i=0;
-                        //for i in 0..4 
+                        //let i=0;
+                        for i in 0..4 
                         {
                             // controller_payload_size = 9;
                             let controller_payload = &buffer[i*9+1..i*9+10];
                             let controller_type = controller_payload[0];
+                            let plugged_in = (controller_type & 0b00010000)!=0;
 
                             // TODO actually use the enum (rust wants you to do pattern matching or something)
                             // TODO dropping a VirtualDevice will drop the underlying OwnedFd, which will close the file descriptor, which should remove the device. so it all works, as long as i can manually drop the value
-                            if (controller_type & 0b00010000)!=0 { // if controller is wired (and therefore plugged in)
+                            let maybe_device = &mut devices[i];
+
+                            if !plugged_in {
+                                // take ownership of the optional (the old ref is now None)
+                                // unconditionally drop it (if None, nothing happens, if Some, destructor is called)
+                                drop(maybe_device.take())
+                            } else {
+                                // if Some, get it, if None, replace it with a new controller and return that
+                                let v_device = maybe_device.get_or_insert_with(|| make_new_controller(i+1));
+
                                 let buttons_1 = controller_payload[1];
                                 let buttons_2 = controller_payload[2];
                             
-                               // y axes need reflection about the center value (128)
-                               let stick_x = controller_payload[3];
-                               let stick_y = 128u8.wrapping_sub(controller_payload[4]).wrapping_sub(128);
-                               let cstick_x = controller_payload[5];
-                               let cstick_y = 128u8.wrapping_sub(controller_payload[6]).wrapping_sub(128);
-                               let l = controller_payload[7];
-                               let r = controller_payload[8];
+                                // y axes need reflection about the center value (128)
+                                let stick_x = controller_payload[3];
+                                let stick_y = 128u8.wrapping_sub(controller_payload[4]).wrapping_sub(128);
+                                let cstick_x = controller_payload[5];
+                                let cstick_y = 128u8.wrapping_sub(controller_payload[6]).wrapping_sub(128);
+                                let l = controller_payload[7];
+                                let r = controller_payload[8];
 
-                               // TODO can be optimized by using the result of lshift (i wonder if the complier does this already)
-                               let a = (buttons_1 >> 0) & 1;
-                               let b = (buttons_1 >> 1) & 1;
-                               let x = (buttons_1 >> 2) & 1;
-                               let y = (buttons_1 >> 3) & 1;
+                                // TODO can be optimized by using the result of lshift (i wonder if the complier does this already)
+                                let a = (buttons_1 >> 0) & 1;
+                                let b = (buttons_1 >> 1) & 1;
+                                let x = (buttons_1 >> 2) & 1;
+                                let y = (buttons_1 >> 3) & 1;
    
-                               let dpad_left =  (buttons_1 >> 4) & 1;
-                               let dpad_right = (buttons_1 >> 5) & 1;
-                               let dpad_down =  (buttons_1 >> 6) & 1;
-                               let dpad_up =    (buttons_1 >> 7) & 1;
+                                let dpad_left =  (buttons_1 >> 4) & 1;
+                                let dpad_right = (buttons_1 >> 5) & 1;
+                                let dpad_down =  (buttons_1 >> 6) & 1;
+                                let dpad_up =    (buttons_1 >> 7) & 1;
                             
-                               let start =   (buttons_2 >> 0) & 1;
-                               let z =       (buttons_2 >> 1) & 1;
-                               let r_click = (buttons_2 >> 2) & 1;
-                               let l_click = (buttons_2 >> 3) & 1;
-                               // i guess some unused bits in byte 3?
+                                let start =   (buttons_2 >> 0) & 1;
+                                let z =       (buttons_2 >> 1) & 1;
+                                let r_click = (buttons_2 >> 2) & 1;
+                                let l_click = (buttons_2 >> 3) & 1;
+                                // i guess some unused bits in byte 3?
 
                                 v_device.emit(&[
                                     InputEvent::new(EventType::KEY, Key::BTN_SOUTH.code(), a.into()),
