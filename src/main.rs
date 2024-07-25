@@ -8,7 +8,7 @@ const TIMEOUT: Duration = Duration::from_millis(1000); // from dolphin source
 
 // TODO only has ports 1-4
 // TODO make const things const
-fn make_new_controller(port_label: usize, wireless: bool) -> VirtualDevice {
+fn make_new_controller(name: &str) -> VirtualDevice {
     // set up virtual pad
     let attr_set = {
         // keep the mutable ref inside this scope
@@ -49,7 +49,7 @@ fn make_new_controller(port_label: usize, wireless: bool) -> VirtualDevice {
     
     VirtualDeviceBuilder::new()
         .unwrap()
-        .name(&format!("Gamecube {} Port {}", if wireless {"Wireless Controller"} else {"Controller"},port_label))
+        .name(name)
         .with_keys(&attr_set)
         .unwrap()
         .with_absolute_axis(&l_stick_x).unwrap()
@@ -68,17 +68,17 @@ fn main() {
     let cx = Context::new().expect("Error loading libUSB");
     let devices = cx.devices().expect("Could not get devices");
     for device in devices.iter() {
-        // TODO find the gamecube adapter
         // TODO hotplugging
         let descriptor = device
             .device_descriptor()
             .expect("Could not get device descriptor");
 
-        
+        // nintendo gamecube adapter (including identically-identifying variants like panda global hardware adapter)
         if descriptor.vendor_id() == 0x057e && descriptor.product_id() == 0x0337 {
             // this is the device
             let mut dev_handle = device.open().expect("Could not open device");
             dev_handle.reset().expect("Could not reset device");
+            // TODO iface hardcoded
             if dev_handle.kernel_driver_active(0).expect("Could not query kernel driver status") {
                 dev_handle.detach_kernel_driver(0).expect("Could not detatch kernel driver");
             }
@@ -137,7 +137,7 @@ fn main() {
                                 drop(maybe_device.take())
                             } else {
                                 // if Some, get it, if None, replace it with a new controller and return that
-                                let v_device = maybe_device.get_or_insert_with(|| make_new_controller(i+1, is_wireless));
+                                let v_device = maybe_device.get_or_insert_with(|| make_new_controller(&format!("Gamecube {} Port {}", if is_wireless {"Wireless Controller"} else {"Controller"},i+1)));
 
                                 let buttons_1 = controller_payload[1];
                                 let buttons_2 = controller_payload[2];
